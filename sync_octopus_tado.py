@@ -38,7 +38,8 @@ async def browser_login(url, username, password):
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
-            headless=True
+            headless=FALSE
+            slow_mo=250
         )  # Set to True if you don't want a browser window
         context = await browser.new_context()
         page = await context.new_page()
