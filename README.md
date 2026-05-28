@@ -30,6 +30,10 @@ independently.
 In order to use the script, you'll need to provide credentials for both your
 Tado account and Octopus Energy API. This is done through GitHub secrets.
 
+The workflow uses a GitHub environment named `Secrets`. If you create
+environment secrets instead of repository secrets, make sure they are added to an
+environment with that exact name.
+
 1. Go to the **Settings** tab of your forked repository.
 2. In the left-hand menu, select **Secrets and variables** > **Actions**.
 3. Click **New repository secret** and add the following secrets:
