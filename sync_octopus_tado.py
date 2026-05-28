@@ -1,14 +1,27 @@
 import argparse
 import asyncio
 import os
-import requests
 from datetime import date, datetime
+from urllib.parse import quote
+
+import requests
 from requests.auth import HTTPBasicAuth
 from PyTado.http import DeviceActivationStatus
 from PyTado.interface import Tado
 
 DEFAULT_TADO_TOKEN_FILE = "/tmp/tado_refresh_token"
 DEFAULT_INITIAL_METER_READING = 6537.9
+OCTOPUS_API_BASE_URL = "https://api.octopus.energy/v1"
+
+
+def build_octopus_consumption_url(mprn, gas_serial_number):
+    mprn_path = quote(str(mprn).strip(), safe="")
+    serial_path = quote(str(gas_serial_number).strip(), safe="")
+
+    return (
+        f"{OCTOPUS_API_BASE_URL}/gas-meter-points/{mprn_path}/"
+        f"meters/{serial_path}/consumption/"
+    )
 
 
 def get_meter_reading_total_consumption(
@@ -21,16 +34,32 @@ def get_meter_reading_total_consumption(
     Retrieves total gas consumption from the Octopus Energy API for the given gas meter point and serial number.
     """
     period_from = datetime(2000, 1, 1, 0, 0, 0)
-    url = f"https://api.octopus.energy/v1/gas-meter-points/{mprn}/meters/{gas_serial_number}/consumption/?group_by=quarter&period_from={period_from.isoformat()}Z"
+    url = build_octopus_consumption_url(mprn, gas_serial_number)
+    params = {
+        "group_by": "quarter",
+        "period_from": f"{period_from.isoformat()}Z",
+    }
     total_consumption = initial_meter_reading
 
     while url:
-        response = requests.get(url, auth=HTTPBasicAuth(api_key, ""), timeout=30)
+        response = requests.get(
+            url,
+            auth=HTTPBasicAuth(api_key, ""),
+            params=params,
+            timeout=30,
+        )
+        params = None
 
         if response.status_code != 200:
+            hint = ""
+            if response.status_code == 404:
+                hint = (
+                    " Check OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL match the gas meter "
+                    "details shown in your Octopus API dashboard."
+                )
             raise RuntimeError(
                 f"Failed to retrieve Octopus data. Status code: {response.status_code}, "
-                f"Message: {response.text}"
+                f"Message: {response.text}{hint}"
             )
 
         meter_readings = response.json()

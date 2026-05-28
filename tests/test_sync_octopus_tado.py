@@ -60,14 +60,34 @@ class OctopusConsumptionTests(unittest.TestCase):
 
         self.assertAlmostEqual(total, 106.9)
         self.assertEqual(get.call_count, 2)
+        self.assertEqual(
+            get.call_args_list[0].args[0],
+            "https://api.octopus.energy/v1/gas-meter-points/mprn/meters/serial/consumption/",
+        )
+        self.assertEqual(
+            get.call_args_list[0].kwargs["params"],
+            {"group_by": "quarter", "period_from": "2000-01-01T00:00:00Z"},
+        )
+        self.assertEqual(
+            get.call_args_list[1].args[0], "https://api.octopus.energy/next-page"
+        )
+        self.assertIsNone(get.call_args_list[1].kwargs["params"])
+
+    def test_consumption_url_escapes_meter_path_values(self):
+        url = sync.build_octopus_consumption_url(" 1234567890 ", "E6S/12 34")
+
+        self.assertEqual(
+            url,
+            "https://api.octopus.energy/v1/gas-meter-points/1234567890/meters/E6S%2F12%2034/consumption/",
+        )
 
     def test_consumption_api_error_stops_without_returning_partial_reading(self):
         with patch.object(
             sync.requests,
             "get",
-            return_value=FakeResponse(500, text="server exploded"),
+            return_value=FakeResponse(404, text="server exploded"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "Failed to retrieve Octopus"):
+            with self.assertRaisesRegex(RuntimeError, "OCTOPUS_MPRN"):
                 sync.get_meter_reading_total_consumption(
                     "api-key",
                     "mprn",

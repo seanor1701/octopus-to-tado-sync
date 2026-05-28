@@ -132,6 +132,9 @@ that your Octopus API key is valid.
 - **Workflow failures**: Detailed logs for each sync run can be found in the
   **Actions** tab of your repository. Use these logs to identify and
 troubleshoot any issues.
+- **Octopus 404 errors**: Verify that `OCTOPUS_MPRN` and `OCTOPUS_GAS_SERIAL`
+  are the gas meter details from your Octopus API dashboard. Electricity MPANs
+  or serials from another meter will return "Not Found".
 - **Browser or antivirus blocks**: The script can complete the Tado device login
   without launching Playwright by passing `--manual-tado-login`. The scheduled
   GitHub workflow runs Playwright headlessly.
