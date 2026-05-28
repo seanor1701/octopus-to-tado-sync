@@ -27,14 +27,35 @@ jobs:
       run: |
         python -m playwright install --with-deps chromium
 
+    - name: Validate required secrets
+      env:
+        TADO_EMAIL: ${{ secrets.TADO_EMAIL }}
+        TADO_PASSWORD: ${{ secrets.TADO_PASSWORD }}
+        OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
+        OCTOPUS_MPRN: ${{ secrets.OCTOPUS_MPRN }}
+        OCTOPUS_GAS_SERIAL: ${{ secrets.OCTOPUS_GAS_SERIAL }}
+        OCTOPUS_ACCOUNT_NUMBER: ${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}
+      run: |
+        missing=()
+        [ -n "$TADO_EMAIL" ] || missing+=("TADO_EMAIL")
+        [ -n "$TADO_PASSWORD" ] || missing+=("TADO_PASSWORD")
+        [ -n "$OCTOPUS_API_KEY" ] || missing+=("OCTOPUS_API_KEY")
+        if [ -z "$OCTOPUS_ACCOUNT_NUMBER" ] && { [ -z "$OCTOPUS_MPRN" ] || [ -z "$OCTOPUS_GAS_SERIAL" ]; }; then
+          missing+=("OCTOPUS_ACCOUNT_NUMBER (or both OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL)")
+        fi
+        if [ "${#missing[@]}" -gt 0 ]; then
+          printf '::error title=Missing GitHub Actions secrets::%s\n' "${missing[*]}"
+          exit 1
+        fi
+
     - name: Run Python script
       env:
+        TADO_EMAIL: ${{ secrets.TADO_EMAIL }}
+        TADO_PASSWORD: ${{ secrets.TADO_PASSWORD }}
         TADO_BROWSER_HEADLESS: "true"
+        OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
+        OCTOPUS_MPRN: ${{ secrets.OCTOPUS_MPRN }}
+        OCTOPUS_GAS_SERIAL: ${{ secrets.OCTOPUS_GAS_SERIAL }}
+        OCTOPUS_ACCOUNT_NUMBER: ${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}
       run: |
-        python sync_octopus_tado.py \
-          --tado-email "${{ secrets.TADO_EMAIL }}" \
-          --tado-password "${{ secrets.TADO_PASSWORD }}" \
-          --mprn "${{ secrets.OCTOPUS_MPRN }}" \
-          --gas-serial-number "${{ secrets.OCTOPUS_GAS_SERIAL }}" \
-          --octopus-api-key "${{ secrets.OCTOPUS_API_KEY }}" \
-          --octopus-account-number "${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}"
+        python sync_octopus_tado.py

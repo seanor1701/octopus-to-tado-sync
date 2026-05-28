@@ -135,6 +135,10 @@ that your Octopus API key is valid.
 - **Workflow failures**: Detailed logs for each sync run can be found in the
   **Actions** tab of your repository. Use these logs to identify and
 troubleshoot any issues.
+- **Secrets are empty in GitHub Actions debug logs**: If debug output shows
+  `secrets.NAME => null`, add the missing values under **Settings** > **Secrets
+  and variables** > **Actions** for the repository running the workflow. GitHub
+  does not provide repository secrets to pull requests from forks.
 - **Octopus 404 errors**: Add `OCTOPUS_ACCOUNT_NUMBER` as a GitHub secret so the
   script can discover your gas meter details from the Octopus account endpoint.
   If it still fails, verify that the account has a gas meter and the API key is

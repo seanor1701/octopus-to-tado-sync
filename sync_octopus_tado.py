@@ -362,6 +362,30 @@ def send_reading_to_tado(
     print(result)
 
 
+def validate_args(args):
+    missing = []
+
+    if not optional_text(args.tado_email):
+        missing.append("TADO_EMAIL")
+    if not optional_text(args.tado_password):
+        missing.append("TADO_PASSWORD")
+    if not optional_text(args.octopus_api_key):
+        missing.append("OCTOPUS_API_KEY")
+    if not optional_text(args.octopus_account_number) and (
+        not optional_text(args.mprn) or not optional_text(args.gas_serial_number)
+    ):
+        missing.append(
+            "OCTOPUS_ACCOUNT_NUMBER (or both OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL)"
+        )
+
+    if missing:
+        raise RuntimeError(
+            "Missing required configuration: "
+            + ", ".join(missing)
+            + ". Configure these as GitHub Actions secrets or pass CLI arguments."
+        )
+
+
 def parse_args():
     """
     Parses command-line arguments for Tado and Octopus API credentials and meter details.
@@ -371,8 +395,16 @@ def parse_args():
     )
 
     # Tado API arguments
-    parser.add_argument("--tado-email", required=True, help="Tado account email")
-    parser.add_argument("--tado-password", required=True, help="Tado account password")
+    parser.add_argument(
+        "--tado-email",
+        default=os.environ.get("TADO_EMAIL"),
+        help="Tado account email",
+    )
+    parser.add_argument(
+        "--tado-password",
+        default=os.environ.get("TADO_PASSWORD"),
+        help="Tado account password",
+    )
     parser.add_argument(
         "--tado-token-file",
         default=os.environ.get("TADO_TOKEN_FILE", DEFAULT_TADO_TOKEN_FILE),
@@ -402,7 +434,11 @@ def parse_args():
         default=os.environ.get("OCTOPUS_GAS_SERIAL"),
         help="Gas meter serial number",
     )
-    parser.add_argument("--octopus-api-key", required=True, help="Octopus API key")
+    parser.add_argument(
+        "--octopus-api-key",
+        default=os.environ.get("OCTOPUS_API_KEY"),
+        help="Octopus API key",
+    )
     parser.add_argument(
         "--octopus-account-number",
         default=os.environ.get("OCTOPUS_ACCOUNT_NUMBER"),
@@ -422,6 +458,7 @@ def parse_args():
 
 if __name__ == "__main__":
     args = parse_args()
+    validate_args(args)
 
     # Get total consumption from Octopus Energy API
     consumption = get_meter_reading_total_consumption(

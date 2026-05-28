@@ -1,9 +1,23 @@
+import argparse
 import unittest
 from unittest.mock import patch
 
 from PyTado.http import DeviceActivationStatus
 
 import sync_octopus_tado as sync
+
+
+def make_args(**overrides):
+    values = {
+        "tado_email": "person@example.com",
+        "tado_password": "secret",
+        "octopus_api_key": "api-key",
+        "mprn": None,
+        "gas_serial_number": None,
+        "octopus_account_number": "A-12345678",
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
 
 
 class FakeResponse:
@@ -176,6 +190,33 @@ class OctopusConsumptionTests(unittest.TestCase):
                 )
 
         get.assert_not_called()
+
+
+class ConfigValidationTests(unittest.TestCase):
+    def test_validate_args_rejects_missing_secrets(self):
+        args = make_args(
+            tado_email="",
+            tado_password=None,
+            octopus_api_key=" ",
+            octopus_account_number="",
+            mprn="",
+            gas_serial_number="",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "TADO_EMAIL"):
+            sync.validate_args(args)
+
+    def test_validate_args_allows_account_number_without_meter_details(self):
+        sync.validate_args(make_args(octopus_account_number="A-12345678"))
+
+    def test_validate_args_allows_explicit_meter_details_without_account_number(self):
+        sync.validate_args(
+            make_args(
+                octopus_account_number=None,
+                mprn="1234567890",
+                gas_serial_number="GAS-123",
+            )
+        )
 
 
 class TadoLoginTests(unittest.TestCase):
