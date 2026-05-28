@@ -41,6 +41,8 @@ Tado account and Octopus Energy API. This is done through GitHub secrets.
 | `OCTOPUS_MPRN`           | Your gas MPRN (Meter Point Reference Number).                 |
 | `OCTOPUS_GAS_SERIAL`     | The serial number of your gas meter.                          |
 | `OCTOPUS_API_KEY`        | Your Octopus Energy API key. You can obtain this from the Octopus Energy developer portal (details below). |
+| `TADO_TOKEN_FILE`         | Optional path used to persist the Tado refresh token. Defaults to `/tmp/tado_refresh_token`. |
+| `OCTOPUS_INITIAL_READING` | Optional meter reading at the start of the Octopus consumption history. Defaults to `6537.9`. |
 
 ### 3. Obtain Your Octopus Energy Details
 
@@ -92,11 +94,27 @@ have occurred.
 
 The GitHub Actions workflow automatically runs the following script:
 
-```bash python sync_octopus_tado.py \ --tado-email "${{ secrets.TADO_EMAIL }}" \
---tado-password "${{ secrets.TADO_PASSWORD }}" \ --mprn "${{
-secrets.OCTOPUS_MPRN }}" \ --gas-serial-number "${{ secrets.OCTOPUS_GAS_SERIAL
-}}" \ --octopus-api-key "${{ secrets.OCTOPUS_API_KEY }}"
+```bash
+python sync_octopus_tado.py \
+  --tado-email "${{ secrets.TADO_EMAIL }}" \
+  --tado-password "${{ secrets.TADO_PASSWORD }}" \
+  --mprn "${{ secrets.OCTOPUS_MPRN }}" \
+  --gas-serial-number "${{ secrets.OCTOPUS_GAS_SERIAL }}" \
+  --octopus-api-key "${{ secrets.OCTOPUS_API_KEY }}"
+```
 
+For local runs where browser automation is blocked by security software, use
+manual Tado activation:
+
+```bash
+python sync_octopus_tado.py \
+  --manual-tado-login \
+  --tado-email "you@example.com" \
+  --tado-password "your-password" \
+  --mprn "your-mprn" \
+  --gas-serial-number "your-meter-serial" \
+  --octopus-api-key "your-octopus-api-key" \
+  --initial-meter-reading "your-starting-meter-reading"
 ```
 
 The script will:
@@ -114,6 +132,9 @@ that your Octopus API key is valid.
 - **Workflow failures**: Detailed logs for each sync run can be found in the
   **Actions** tab of your repository. Use these logs to identify and
 troubleshoot any issues.
+- **Browser or antivirus blocks**: The script can complete the Tado device login
+  without launching Playwright by passing `--manual-tado-login`. The scheduled
+  GitHub workflow runs Playwright headlessly.
 
 ### Contributions
 
