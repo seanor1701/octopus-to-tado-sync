@@ -14,6 +14,28 @@ DEFAULT_INITIAL_METER_READING = 6537.9
 OCTOPUS_API_BASE_URL = "https://api.octopus.energy/v1"
 
 
+class OctopusApiError(RuntimeError):
+    def __init__(self, status_code, message):
+        self.status_code = status_code
+        super().__init__(message)
+
+
+def optional_text(value):
+    if value is None:
+        return None
+
+    value = str(value).strip()
+    return value or None
+
+
+def response_message(response):
+    text = response.text.strip()
+    if len(text) > 500:
+        return f"{text[:500]}..."
+
+    return text
+
+
 def build_octopus_consumption_url(mprn, gas_serial_number):
     mprn_path = quote(str(mprn).strip(), safe="")
     serial_path = quote(str(gas_serial_number).strip(), safe="")
@@ -24,15 +46,73 @@ def build_octopus_consumption_url(mprn, gas_serial_number):
     )
 
 
-def get_meter_reading_total_consumption(
+def build_octopus_account_url(account_number):
+    account_path = quote(str(account_number).strip(), safe="")
+    return f"{OCTOPUS_API_BASE_URL}/accounts/{account_path}/"
+
+
+def get_octopus_account(api_key, account_number):
+    response = requests.get(
+        build_octopus_account_url(account_number),
+        auth=HTTPBasicAuth(api_key, ""),
+        timeout=30,
+    )
+
+    if response.status_code != 200:
+        raise OctopusApiError(
+            response.status_code,
+            f"Failed to retrieve Octopus account data. Status code: {response.status_code}, "
+            f"Message: {response_message(response)}",
+        )
+
+    return response.json()
+
+
+def get_gas_meter_candidates(account):
+    candidates = []
+
+    for property_data in account.get("properties", []):
+        is_active_property = property_data.get("moved_out_at") is None
+
+        for meter_point in property_data.get("gas_meter_points", []):
+            mprn = optional_text(meter_point.get("mprn"))
+            if not mprn:
+                continue
+
+            for meter in meter_point.get("meters", []):
+                serial_number = optional_text(meter.get("serial_number"))
+                if not serial_number:
+                    continue
+
+                candidates.append(
+                    {
+                        "mprn": mprn,
+                        "gas_serial_number": serial_number,
+                        "is_active_property": is_active_property,
+                    }
+                )
+
+    candidates.sort(key=lambda candidate: not candidate["is_active_property"])
+    return candidates
+
+
+def describe_gas_meter_candidates(candidates):
+    if not candidates:
+        return "No gas meters were found on the Octopus account."
+
+    active_count = sum(1 for candidate in candidates if candidate["is_active_property"])
+    return (
+        f"Found {len(candidates)} gas meter candidate(s), "
+        f"{active_count} on active properties."
+    )
+
+
+def get_meter_consumption_from_octopus(
     api_key,
     mprn,
     gas_serial_number,
-    initial_meter_reading=DEFAULT_INITIAL_METER_READING,
+    initial_meter_reading,
 ):
-    """
-    Retrieves total gas consumption from the Octopus Energy API for the given gas meter point and serial number.
-    """
     period_from = datetime(2000, 1, 1, 0, 0, 0)
     url = build_octopus_consumption_url(mprn, gas_serial_number)
     params = {
@@ -55,11 +135,13 @@ def get_meter_reading_total_consumption(
             if response.status_code == 404:
                 hint = (
                     " Check OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL match the gas meter "
-                    "details shown in your Octopus API dashboard."
+                    "details shown in your Octopus API dashboard, or set "
+                    "OCTOPUS_ACCOUNT_NUMBER so they can be discovered automatically."
                 )
-            raise RuntimeError(
+            raise OctopusApiError(
+                response.status_code,
                 f"Failed to retrieve Octopus data. Status code: {response.status_code}, "
-                f"Message: {response.text}{hint}"
+                f"Message: {response_message(response)}{hint}",
             )
 
         meter_readings = response.json()
@@ -68,8 +150,75 @@ def get_meter_reading_total_consumption(
         )
         url = meter_readings.get("next") or ""
 
-    print(f"Total consumption is {total_consumption}")
     return total_consumption
+
+
+def get_meter_reading_total_consumption(
+    api_key,
+    mprn=None,
+    gas_serial_number=None,
+    account_number=None,
+    initial_meter_reading=DEFAULT_INITIAL_METER_READING,
+):
+    """
+    Retrieves total gas consumption from the Octopus Energy API for the given gas meter point and serial number.
+    """
+    mprn = optional_text(mprn)
+    gas_serial_number = optional_text(gas_serial_number)
+    account_number = optional_text(account_number)
+
+    if mprn and gas_serial_number:
+        try:
+            total_consumption = get_meter_consumption_from_octopus(
+                api_key,
+                mprn,
+                gas_serial_number,
+                initial_meter_reading,
+            )
+            print(f"Total consumption is {total_consumption}")
+            return total_consumption
+        except OctopusApiError as exc:
+            if exc.status_code != 404 or not account_number:
+                raise
+
+            print(
+                "Octopus did not find the configured gas meter. "
+                "Trying gas meters from the Octopus account endpoint..."
+            )
+
+    if not account_number:
+        raise RuntimeError(
+            "Set OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL, or set OCTOPUS_ACCOUNT_NUMBER "
+            "so the gas meter can be discovered automatically."
+        )
+
+    candidates = get_gas_meter_candidates(get_octopus_account(api_key, account_number))
+    if not candidates:
+        raise RuntimeError("No gas meters were found on the Octopus account.")
+
+    last_error = None
+    for candidate in candidates:
+        try:
+            total_consumption = get_meter_consumption_from_octopus(
+                api_key,
+                candidate["mprn"],
+                candidate["gas_serial_number"],
+                initial_meter_reading,
+            )
+            print(
+                f"{describe_gas_meter_candidates(candidates)} Using discovered gas meter."
+            )
+            print(f"Total consumption is {total_consumption}")
+            return total_consumption
+        except OctopusApiError as exc:
+            last_error = exc
+            if exc.status_code != 404:
+                raise
+
+    raise RuntimeError(
+        f"None of the gas meters on the Octopus account returned consumption data. "
+        f"{describe_gas_meter_candidates(candidates)} Last error: {last_error}"
+    )
 
 
 def env_flag(name, default=False):
@@ -245,13 +394,20 @@ def parse_args():
     # Octopus API arguments
     parser.add_argument(
         "--mprn",
-        required=True,
+        default=os.environ.get("OCTOPUS_MPRN"),
         help="MPRN (Meter Point Reference Number) for the gas meter",
     )
     parser.add_argument(
-        "--gas-serial-number", required=True, help="Gas meter serial number"
+        "--gas-serial-number",
+        default=os.environ.get("OCTOPUS_GAS_SERIAL"),
+        help="Gas meter serial number",
     )
     parser.add_argument("--octopus-api-key", required=True, help="Octopus API key")
+    parser.add_argument(
+        "--octopus-account-number",
+        default=os.environ.get("OCTOPUS_ACCOUNT_NUMBER"),
+        help="Octopus account number, used to auto-discover gas meter details",
+    )
     parser.add_argument(
         "--initial-meter-reading",
         type=float,
@@ -272,6 +428,7 @@ if __name__ == "__main__":
         args.octopus_api_key,
         args.mprn,
         args.gas_serial_number,
+        account_number=args.octopus_account_number,
         initial_meter_reading=args.initial_meter_reading,
     )
 

@@ -41,19 +41,20 @@ Tado account and Octopus Energy API. This is done through GitHub secrets.
 | `OCTOPUS_MPRN`           | Your gas MPRN (Meter Point Reference Number).                 |
 | `OCTOPUS_GAS_SERIAL`     | The serial number of your gas meter.                          |
 | `OCTOPUS_API_KEY`        | Your Octopus Energy API key. You can obtain this from the Octopus Energy developer portal (details below). |
+| `OCTOPUS_ACCOUNT_NUMBER` | Optional but recommended. Used to auto-discover gas meter details if `OCTOPUS_MPRN` or `OCTOPUS_GAS_SERIAL` are wrong or missing. |
 | `TADO_TOKEN_FILE`         | Optional path used to persist the Tado refresh token. Defaults to `/tmp/tado_refresh_token`. |
 | `OCTOPUS_INITIAL_READING` | Optional meter reading at the start of the Octopus consumption history. Defaults to `6537.9`. |
 
 ### 3. Obtain Your Octopus Energy Details
 
-To find your **API Key**, **Gas MPRN**, and **Gas Serial Number**, follow these
-steps:
+To find your **API Key**, **Account Number**, **Gas MPRN**, and **Gas Serial
+Number**, follow these steps:
 
 1. Log into your [Octopus Energy
 account](https://octopus.energy/dashboard/new/accounts/personal-details/api-access).
 2. Navigate to the "API Access" section of your account. Here, you'll find your
 **API Key**.
-3. Your **Gas MPRN** and **Gas Serial Number** can also be found in this
+3. Your **Account Number**, **Gas MPRN**, and **Gas Serial Number** can also be found in this
 section.
 
 These details are necessary to allow the script to pull your gas usage data from
@@ -100,7 +101,8 @@ python sync_octopus_tado.py \
   --tado-password "${{ secrets.TADO_PASSWORD }}" \
   --mprn "${{ secrets.OCTOPUS_MPRN }}" \
   --gas-serial-number "${{ secrets.OCTOPUS_GAS_SERIAL }}" \
-  --octopus-api-key "${{ secrets.OCTOPUS_API_KEY }}"
+  --octopus-api-key "${{ secrets.OCTOPUS_API_KEY }}" \
+  --octopus-account-number "${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}"
 ```
 
 For local runs where browser automation is blocked by security software, use
@@ -114,6 +116,7 @@ python sync_octopus_tado.py \
   --mprn "your-mprn" \
   --gas-serial-number "your-meter-serial" \
   --octopus-api-key "your-octopus-api-key" \
+  --octopus-account-number "your-account-number" \
   --initial-meter-reading "your-starting-meter-reading"
 ```
 
@@ -132,9 +135,10 @@ that your Octopus API key is valid.
 - **Workflow failures**: Detailed logs for each sync run can be found in the
   **Actions** tab of your repository. Use these logs to identify and
 troubleshoot any issues.
-- **Octopus 404 errors**: Verify that `OCTOPUS_MPRN` and `OCTOPUS_GAS_SERIAL`
-  are the gas meter details from your Octopus API dashboard. Electricity MPANs
-  or serials from another meter will return "Not Found".
+- **Octopus 404 errors**: Add `OCTOPUS_ACCOUNT_NUMBER` as a GitHub secret so the
+  script can discover your gas meter details from the Octopus account endpoint.
+  If it still fails, verify that the account has a gas meter and the API key is
+  for that account.
 - **Browser or antivirus blocks**: The script can complete the Tado device login
   without launching Playwright by passing `--manual-tado-login`. The scheduled
   GitHub workflow runs Playwright headlessly.

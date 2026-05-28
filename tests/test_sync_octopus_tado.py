@@ -95,6 +95,88 @@ class OctopusConsumptionTests(unittest.TestCase):
                     initial_meter_reading=100.0,
                 )
 
+    def test_account_discovery_uses_gas_meter_when_details_are_missing(self):
+        responses = [
+            FakeResponse(
+                200,
+                {
+                    "properties": [
+                        {
+                            "moved_out_at": None,
+                            "gas_meter_points": [
+                                {
+                                    "mprn": "1234567890",
+                                    "meters": [{"serial_number": "GAS-123"}],
+                                }
+                            ],
+                        }
+                    ]
+                },
+            ),
+            FakeResponse(200, {"results": [{"consumption": 4.5}], "next": None}),
+        ]
+
+        with patch.object(sync.requests, "get", side_effect=responses) as get:
+            total = sync.get_meter_reading_total_consumption(
+                "api-key",
+                account_number="A-12345678",
+                initial_meter_reading=100.0,
+            )
+
+        self.assertEqual(total, 104.5)
+        self.assertEqual(
+            get.call_args_list[0].args[0],
+            "https://api.octopus.energy/v1/accounts/A-12345678/",
+        )
+        self.assertEqual(
+            get.call_args_list[1].args[0],
+            "https://api.octopus.energy/v1/gas-meter-points/1234567890/meters/GAS-123/consumption/",
+        )
+
+    def test_account_discovery_retries_after_configured_meter_404(self):
+        responses = [
+            FakeResponse(404, text="not found"),
+            FakeResponse(
+                200,
+                {
+                    "properties": [
+                        {
+                            "moved_out_at": None,
+                            "gas_meter_points": [
+                                {
+                                    "mprn": "1234567890",
+                                    "meters": [{"serial_number": "GAS-123"}],
+                                }
+                            ],
+                        }
+                    ]
+                },
+            ),
+            FakeResponse(200, {"results": [{"consumption": 4.5}], "next": None}),
+        ]
+
+        with patch.object(sync.requests, "get", side_effect=responses):
+            total = sync.get_meter_reading_total_consumption(
+                "api-key",
+                mprn="wrong-mprn",
+                gas_serial_number="wrong-serial",
+                account_number="A-12345678",
+                initial_meter_reading=100.0,
+            )
+
+        self.assertEqual(total, 104.5)
+
+    def test_missing_meter_details_and_account_number_fails_before_request(self):
+        with patch.object(sync.requests, "get") as get:
+            with self.assertRaisesRegex(RuntimeError, "OCTOPUS_ACCOUNT_NUMBER"):
+                sync.get_meter_reading_total_consumption(
+                    "api-key",
+                    mprn=" ",
+                    gas_serial_number="",
+                )
+
+        get.assert_not_called()
+
 
 class TadoLoginTests(unittest.TestCase):
     def test_pending_activation_uses_browser_and_activates(self):
