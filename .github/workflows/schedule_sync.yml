@@ -17,21 +17,18 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.12'
+        python-version: '3.14'
 
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: Initialise playwright
-      run: |
-        python -m playwright install --with-deps chromium
-
     - name: Validate required secrets
       env:
         TADO_EMAIL: ${{ secrets.TADO_EMAIL }}
         TADO_PASSWORD: ${{ secrets.TADO_PASSWORD }}
+        TADO_REFRESH_TOKEN: ${{ secrets.TADO_REFRESH_TOKEN }}
         OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
         OCTOPUS_MPRN: ${{ secrets.OCTOPUS_MPRN }}
         OCTOPUS_GAS_SERIAL: ${{ secrets.OCTOPUS_GAS_SERIAL }}
@@ -40,6 +37,7 @@ jobs:
         missing=()
         [ -n "$TADO_EMAIL" ] || missing+=("TADO_EMAIL")
         [ -n "$TADO_PASSWORD" ] || missing+=("TADO_PASSWORD")
+        [ -n "$TADO_REFRESH_TOKEN" ] || missing+=("TADO_REFRESH_TOKEN")
         [ -n "$OCTOPUS_API_KEY" ] || missing+=("OCTOPUS_API_KEY")
         if [ -z "$OCTOPUS_ACCOUNT_NUMBER" ] && { [ -z "$OCTOPUS_MPRN" ] || [ -z "$OCTOPUS_GAS_SERIAL" ]; }; then
           missing+=("OCTOPUS_ACCOUNT_NUMBER (or both OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL)")
@@ -53,7 +51,7 @@ jobs:
       env:
         TADO_EMAIL: ${{ secrets.TADO_EMAIL }}
         TADO_PASSWORD: ${{ secrets.TADO_PASSWORD }}
-        TADO_BROWSER_HEADLESS: "true"
+        TADO_REFRESH_TOKEN: ${{ secrets.TADO_REFRESH_TOKEN }}
         OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
         OCTOPUS_MPRN: ${{ secrets.OCTOPUS_MPRN }}
         OCTOPUS_GAS_SERIAL: ${{ secrets.OCTOPUS_GAS_SERIAL }}
