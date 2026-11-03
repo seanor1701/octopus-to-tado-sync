@@ -1,5 +1,4 @@
 import argparse
-import asyncio
 import os
 from datetime import date, datetime
 from urllib.parse import quote
@@ -245,58 +244,6 @@ def activation_status_label(status):
     return getattr(status, "value", str(status))
 
 
-async def browser_login(url, username, password, headless=True):
-    try:
-        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
-        from playwright.async_api import async_playwright
-    except Exception as exc:
-        raise RuntimeError(
-            "Playwright browser automation is unavailable. Install Playwright's "
-            "browser dependencies, or rerun with --manual-tado-login and open "
-            "the Tado verification URL yourself."
-        ) from exc
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=headless,
-            slow_mo=0 if headless else 250,
-        )
-        try:
-            context = await browser.new_context()
-            page = await context.new_page()
-
-            await page.goto(url)
-
-            try:
-                await page.wait_for_selector('text="Submit"', timeout=5000)
-                await page.click('text="Submit"')
-            except PlaywrightTimeoutError:
-                pass
-
-            # Wait for the login form to appear
-            await page.wait_for_selector('input[name="loginId"]')
-
-            await page.fill('input[id="loginId"]', username)
-            await page.fill('input[name="password"]', password)
-
-            await page.click('button.c-btn--primary:has-text("Sign in")')
-
-            await page.wait_for_selector(
-                ".text-center.message-screen.b-bubble-screen__spaced", timeout=10000
-            )
-
-            if env_flag("TADO_DEBUG_SCREENSHOTS"):
-                await page.screenshot(path="after-message.png")
-
-        finally:
-            await browser.close()
-
-
-def complete_tado_login_manually(url):
-    print(f"Open this Tado verification URL and complete login:\n{url}")
-    input("Press Enter once Tado says the device login is complete...")
-
-
 def tado_login(
     username,
     password,
@@ -304,25 +251,29 @@ def tado_login(
     manual_login=False,
     browser_headless=True,
 ):
-    tado = Tado(token_file_path=token_file_path)
+    del username, password, browser_headless
+    tado = Tado(
+        token_file_path=token_file_path,
+        saved_refresh_token=optional_text(os.environ.get("TADO_REFRESH_TOKEN")),
+    )
 
     status = tado.device_activation_status()
 
     if activation_status_matches(status, DeviceActivationStatus.PENDING):
-        url = tado.device_verification_url()
-        if not url:
+        if not manual_login:
             raise RuntimeError(
-                "Tado device activation is pending, but no verification URL was returned."
+                "Tado device activation is pending. Complete the one-time device "
+                "authorization locally, then store the resulting refresh token as "
+                "TADO_REFRESH_TOKEN for CI."
             )
 
-        if manual_login:
-            complete_tado_login_manually(url)
-        else:
-            asyncio.run(
-                browser_login(url, username, password, headless=browser_headless)
-            )
-
-        tado.device_activation()
+        try:
+            tado.device_activation()
+        except Exception as exc:
+            raise RuntimeError(
+                "Tado device activation did not complete. It may still be pending, "
+                "expired, or rejected; no reading was sent."
+            ) from exc
 
         status = tado.device_activation_status()
 

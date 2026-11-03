@@ -39,9 +39,6 @@ class FakeTado:
     def device_activation_status(self):
         return self.status
 
-    def device_verification_url(self):
-        return "https://login.tado.example/device"
-
     def device_activation(self):
         self.activated = True
         self.status = DeviceActivationStatus.COMPLETED
@@ -220,43 +217,24 @@ class ConfigValidationTests(unittest.TestCase):
 
 
 class TadoLoginTests(unittest.TestCase):
-    def test_pending_activation_uses_browser_and_activates(self):
+    def test_pending_activation_fails_closed_without_ci_refresh_token(self):
         fake_tado = FakeTado(DeviceActivationStatus.PENDING)
-        browser_calls = []
-
-        async def fake_browser_login(*args, **kwargs):
-            browser_calls.append((args, kwargs))
 
         with patch.object(sync, "Tado", return_value=fake_tado), patch.object(
-            sync, "browser_login", new=fake_browser_login
+            sync.os, "environ", {}
         ):
-            result = sync.tado_login(
-                "person@example.com",
-                "secret",
-                token_file_path="/tmp/test-token",
-                browser_headless=True,
-            )
-
-        self.assertIs(result, fake_tado)
-        self.assertTrue(fake_tado.activated)
-        self.assertEqual(len(browser_calls), 1)
-        self.assertEqual(
-            browser_calls[0][0],
-            ("https://login.tado.example/device", "person@example.com", "secret"),
-        )
-        self.assertEqual(browser_calls[0][1], {"headless": True})
+            with self.assertRaisesRegex(RuntimeError, "TADO_REFRESH_TOKEN"):
+                sync.tado_login("person@example.com", "secret")
 
     def test_completed_activation_does_not_launch_browser(self):
         fake_tado = FakeTado(DeviceActivationStatus.COMPLETED)
 
-        with patch.object(sync, "Tado", return_value=fake_tado), patch.object(
-            sync, "browser_login"
-        ) as browser_login:
+        with patch.object(sync, "Tado", return_value=fake_tado):
             result = sync.tado_login("person@example.com", "secret")
 
         self.assertIs(result, fake_tado)
         self.assertFalse(fake_tado.activated)
-        browser_login.assert_not_called()
+        self.assertFalse(fake_tado.activated)
 
     def test_send_reading_uses_today_and_integer_reading(self):
         fake_tado = FakeTado(DeviceActivationStatus.COMPLETED)
