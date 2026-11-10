@@ -2,17 +2,32 @@ name: Run Tado-Octopus Script
 
 on:
   workflow_dispatch:
+    inputs:
+      auth_only:
+        description: Check authentication and save the token without submitting a reading
+        type: boolean
+        default: true
   schedule:
     # Runs every day at 12pm UTC
     - cron: '0 12 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   run_script:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: Secrets
+    timeout-minutes: 15
+    concurrency:
+      group: tado-token-Secrets
+      cancel-in-progress: false
     steps:
     - name: Checkout code
       uses: actions/checkout@v5
+      with:
+        persist-credentials: false
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -26,21 +41,22 @@ jobs:
 
     - name: Validate required secrets
       env:
-        TADO_EMAIL: ${{ secrets.TADO_EMAIL }}
-        TADO_PASSWORD: ${{ secrets.TADO_PASSWORD }}
+        TADO_TOKEN_STORE_TOKEN: ${{ secrets.TADO_TOKEN_STORE_TOKEN }}
         TADO_REFRESH_TOKEN: ${{ secrets.TADO_REFRESH_TOKEN }}
         OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
         OCTOPUS_MPRN: ${{ secrets.OCTOPUS_MPRN }}
         OCTOPUS_GAS_SERIAL: ${{ secrets.OCTOPUS_GAS_SERIAL }}
         OCTOPUS_ACCOUNT_NUMBER: ${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}
+        AUTH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.auth_only }}
       run: |
         missing=()
-        [ -n "$TADO_EMAIL" ] || missing+=("TADO_EMAIL")
-        [ -n "$TADO_PASSWORD" ] || missing+=("TADO_PASSWORD")
+        [ -n "$TADO_TOKEN_STORE_TOKEN" ] || missing+=("TADO_TOKEN_STORE_TOKEN (fine-grained token: this repository, Environments read and write)")
         [ -n "$TADO_REFRESH_TOKEN" ] || missing+=("TADO_REFRESH_TOKEN")
-        [ -n "$OCTOPUS_API_KEY" ] || missing+=("OCTOPUS_API_KEY")
-        if [ -z "$OCTOPUS_ACCOUNT_NUMBER" ] && { [ -z "$OCTOPUS_MPRN" ] || [ -z "$OCTOPUS_GAS_SERIAL" ]; }; then
-          missing+=("OCTOPUS_ACCOUNT_NUMBER (or both OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL)")
+        if [ "$AUTH_ONLY" != "true" ]; then
+          [ -n "$OCTOPUS_API_KEY" ] || missing+=("OCTOPUS_API_KEY")
+          if [ -z "$OCTOPUS_ACCOUNT_NUMBER" ] && { [ -z "$OCTOPUS_MPRN" ] || [ -z "$OCTOPUS_GAS_SERIAL" ]; }; then
+            missing+=("OCTOPUS_ACCOUNT_NUMBER (or both OCTOPUS_MPRN and OCTOPUS_GAS_SERIAL)")
+          fi
         fi
         if [ "${#missing[@]}" -gt 0 ]; then
           printf '::error title=Missing GitHub Actions secrets::%s\n' "${missing[*]}"
@@ -49,12 +65,17 @@ jobs:
 
     - name: Run Python script
       env:
-        TADO_EMAIL: ${{ secrets.TADO_EMAIL }}
-        TADO_PASSWORD: ${{ secrets.TADO_PASSWORD }}
+        TADO_TOKEN_STORE_TOKEN: ${{ secrets.TADO_TOKEN_STORE_TOKEN }}
         TADO_REFRESH_TOKEN: ${{ secrets.TADO_REFRESH_TOKEN }}
         OCTOPUS_API_KEY: ${{ secrets.OCTOPUS_API_KEY }}
         OCTOPUS_MPRN: ${{ secrets.OCTOPUS_MPRN }}
         OCTOPUS_GAS_SERIAL: ${{ secrets.OCTOPUS_GAS_SERIAL }}
         OCTOPUS_ACCOUNT_NUMBER: ${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}
+        OCTOPUS_INITIAL_READING: ${{ secrets.OCTOPUS_INITIAL_READING || '6537.9' }}
+        AUTH_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.auth_only }}
       run: |
-        python sync_octopus_tado.py
+        if [ "$AUTH_ONLY" = "true" ]; then
+          python sync_octopus_tado.py --auth-only
+        else
+          python sync_octopus_tado.py
+        fi
