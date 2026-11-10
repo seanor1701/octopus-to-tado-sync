@@ -9,8 +9,8 @@ import sync_octopus_tado as sync
 
 def make_args(**overrides):
     values = {
-        "tado_email": "person@example.com",
-        "tado_password": "secret",
+        "auth_only": False,
+        "manual_tado_login": False,
         "octopus_api_key": "api-key",
         "mprn": None,
         "gas_serial_number": None,
@@ -192,15 +192,13 @@ class OctopusConsumptionTests(unittest.TestCase):
 class ConfigValidationTests(unittest.TestCase):
     def test_validate_args_rejects_missing_secrets(self):
         args = make_args(
-            tado_email="",
-            tado_password=None,
             octopus_api_key=" ",
             octopus_account_number="",
             mprn="",
             gas_serial_number="",
         )
 
-        with self.assertRaisesRegex(RuntimeError, "TADO_EMAIL"):
+        with self.assertRaisesRegex(RuntimeError, "OCTOPUS_API_KEY"):
             sync.validate_args(args)
 
     def test_validate_args_allows_account_number_without_meter_details(self):
@@ -217,49 +215,43 @@ class ConfigValidationTests(unittest.TestCase):
 
 
 class TadoLoginTests(unittest.TestCase):
-    def test_pending_activation_fails_closed_without_ci_refresh_token(self):
-        fake_tado = FakeTado(DeviceActivationStatus.PENDING)
-
-        with patch.object(sync, "Tado", return_value=fake_tado), patch.object(
-            sync.os, "environ", {}
-        ):
-            with self.assertRaisesRegex(RuntimeError, "TADO_REFRESH_TOKEN"):
-                sync.tado_login("person@example.com", "secret")
-
-    def test_completed_activation_does_not_launch_browser(self):
-        fake_tado = FakeTado(DeviceActivationStatus.COMPLETED)
-
-        with patch.object(sync, "Tado", return_value=fake_tado):
-            result = sync.tado_login("person@example.com", "secret")
-
-        self.assertIs(result, fake_tado)
-        self.assertFalse(fake_tado.activated)
-        self.assertFalse(fake_tado.activated)
-
     def test_send_reading_uses_today_and_integer_reading(self):
         fake_tado = FakeTado(DeviceActivationStatus.COMPLETED)
-
-        with patch.object(sync, "tado_login", return_value=fake_tado) as login:
-            sync.send_reading_to_tado(
-                "person@example.com",
-                "secret",
-                123.9,
-                token_file_path="/tmp/test-token",
-                manual_login=True,
-                browser_headless=False,
-            )
-
-        login.assert_called_once_with(
-            username="person@example.com",
-            password="secret",
-            token_file_path="/tmp/test-token",
-            manual_login=True,
-            browser_headless=False,
-        )
+        sync.send_reading_to_tado(fake_tado, 123.9)
         self.assertEqual(fake_tado.reading_kwargs["reading"], 123)
         self.assertEqual(
             fake_tado.reading_kwargs["date"], sync.date.today().isoformat()
         )
+
+    def test_auth_only_never_fetches_or_submits_meter_data(self):
+        with patch.object(sync, "GitHubTokenStore"), patch.object(
+            sync, "tado_session"
+        ), patch.object(
+            sync, "get_meter_reading_total_consumption"
+        ) as fetch, patch.object(
+            sync, "send_reading_to_tado"
+        ) as send:
+            sync.main(["--auth-only"])
+        fetch.assert_not_called()
+        send.assert_not_called()
+
+    def test_octopus_failure_never_authenticates_or_submits(self):
+        with patch.object(sync, "GitHubTokenStore"), patch.object(
+            sync,
+            "get_meter_reading_total_consumption",
+            side_effect=RuntimeError("API failed"),
+        ), patch.object(sync, "tado_session") as login:
+            with patch.dict(
+                sync.os.environ,
+                {
+                    "OCTOPUS_API_KEY": "example-placeholder-do-not-use",
+                    "OCTOPUS_MPRN": "1234567890",
+                    "OCTOPUS_GAS_SERIAL": "EXAMPLE",
+                },
+            ):
+                with self.assertRaisesRegex(RuntimeError, "API failed"):
+                    sync.main([])
+        login.assert_not_called()
 
 
 if __name__ == "__main__":

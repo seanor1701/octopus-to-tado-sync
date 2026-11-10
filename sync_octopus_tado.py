@@ -1,14 +1,13 @@
 import argparse
 import os
+import sys
 from datetime import date, datetime
 from urllib.parse import quote
 
 import requests
 from requests.auth import HTTPBasicAuth
-from PyTado.http import DeviceActivationStatus
-from PyTado.interface import Tado
+from tado_auth import GitHubTokenStore, TadoAuthError, tado_session
 
-DEFAULT_TADO_TOKEN_FILE = "/tmp/tado_refresh_token"
 DEFAULT_INITIAL_METER_READING = 6537.9
 OCTOPUS_API_BASE_URL = "https://api.octopus.energy/v1"
 
@@ -228,98 +227,22 @@ def env_flag(name, default=False):
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def activation_status_matches(status, expected):
-    """
-    python-tado returns a DeviceActivationStatus enum, but this also supports
-    older string-like values if the dependency changes again.
-    """
-    return (
-        status == expected
-        or status == expected.value
-        or getattr(status, "value", None) == expected.value
-    )
-
-
-def activation_status_label(status):
-    return getattr(status, "value", str(status))
-
-
-def tado_login(
-    username,
-    password,
-    token_file_path=DEFAULT_TADO_TOKEN_FILE,
-    manual_login=False,
-    browser_headless=True,
-):
-    del username, password, browser_headless
-    tado = Tado(
-        token_file_path=token_file_path,
-        saved_refresh_token=optional_text(os.environ.get("TADO_REFRESH_TOKEN")),
-    )
-
-    status = tado.device_activation_status()
-
-    if activation_status_matches(status, DeviceActivationStatus.PENDING):
-        if not manual_login:
-            raise RuntimeError(
-                "Tado device activation is pending. Complete the one-time device "
-                "authorization locally, then store the resulting refresh token as "
-                "TADO_REFRESH_TOKEN for CI."
-            )
-
-        try:
-            tado.device_activation()
-        except Exception as exc:
-            raise RuntimeError(
-                "Tado device activation did not complete. It may still be pending, "
-                "expired, or rejected; no reading was sent."
-            ) from exc
-
-        status = tado.device_activation_status()
-
-    if not activation_status_matches(status, DeviceActivationStatus.COMPLETED):
-        raise RuntimeError(
-            f"Tado login failed. Activation status is {activation_status_label(status)}."
-        )
-
-    print("Login successful")
-
-    return tado
-
-
-def send_reading_to_tado(
-    username,
-    password,
-    reading,
-    token_file_path=DEFAULT_TADO_TOKEN_FILE,
-    manual_login=False,
-    browser_headless=True,
-):
+def send_reading_to_tado(tado, reading):
     """
     Sends the total consumption reading to Tado using its Energy IQ feature.
     """
 
-    tado = tado_login(
-        username=username,
-        password=password,
-        token_file_path=token_file_path,
-        manual_login=manual_login,
-        browser_headless=browser_headless,
-    )
-
-    result = tado.set_eiq_meter_readings(
-        date=date.today().isoformat(), reading=int(reading)
-    )
-    print(result)
+    tado.set_eiq_meter_readings(date=date.today().isoformat(), reading=int(reading))
+    print("Tado reading submitted.")
 
 
 def validate_args(args):
     missing = []
 
-    if not optional_text(args.tado_email):
-        missing.append("TADO_EMAIL")
-    if not optional_text(args.tado_password):
-        missing.append("TADO_PASSWORD")
+    if args.manual_tado_login and not args.auth_only:
+        raise RuntimeError("Use --manual-tado-login with --auth-only for setup.")
+    if args.auth_only:
+        return
     if not optional_text(args.octopus_api_key):
         missing.append("OCTOPUS_API_KEY")
     if not optional_text(args.octopus_account_number) and (
@@ -337,7 +260,7 @@ def validate_args(args):
         )
 
 
-def parse_args():
+def parse_args(argv=None):
     """
     Parses command-line arguments for Tado and Octopus API credentials and meter details.
     """
@@ -345,33 +268,16 @@ def parse_args():
         description="Tado and Octopus API Interaction Script"
     )
 
-    # Tado API arguments
     parser.add_argument(
-        "--tado-email",
-        default=os.environ.get("TADO_EMAIL"),
-        help="Tado account email",
-    )
-    parser.add_argument(
-        "--tado-password",
-        default=os.environ.get("TADO_PASSWORD"),
-        help="Tado account password",
-    )
-    parser.add_argument(
-        "--tado-token-file",
-        default=os.environ.get("TADO_TOKEN_FILE", DEFAULT_TADO_TOKEN_FILE),
-        help="Path used to persist the Tado refresh token",
+        "--auth-only",
+        action="store_true",
+        help="Check and save Tado authentication without reading or submitting meter data",
     )
     parser.add_argument(
         "--manual-tado-login",
         action="store_true",
         default=env_flag("TADO_MANUAL_LOGIN"),
-        help="Print the Tado verification URL and wait for manual login instead of using Playwright",
-    )
-    parser.add_argument(
-        "--tado-browser-headless",
-        action=argparse.BooleanOptionalAction,
-        default=env_flag("TADO_BROWSER_HEADLESS", default=env_flag("CI")),
-        help="Run the Playwright login browser in headless mode",
+        help="Open Tado approval in the local browser and save the token directly to GitHub",
     )
 
     # Octopus API arguments
@@ -404,28 +310,40 @@ def parse_args():
         help="Meter reading at the start of the Octopus consumption history",
     )
 
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    validate_args(args)
+    store = GitHubTokenStore(
+        os.environ.get("GITHUB_REPOSITORY", "seanor1701/octopus-to-tado-sync"),
+        require_writer=os.environ.get("GITHUB_ACTIONS") == "true",
+    )
+    if not args.auth_only:
+        consumption = get_meter_reading_total_consumption(
+            args.octopus_api_key,
+            args.mprn,
+            args.gas_serial_number,
+            account_number=args.octopus_account_number,
+            initial_meter_reading=args.initial_meter_reading,
+        )
+    with tado_session(
+        refresh_token=(
+            None if args.manual_tado_login else os.environ.get("TADO_REFRESH_TOKEN")
+        ),
+        interactive=args.manual_tado_login,
+        persist=store,
+    ) as tado:
+        if args.auth_only:
+            print("Tado authentication confirmed; refresh token saved in GitHub.")
+        else:
+            send_reading_to_tado(tado, consumption)
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    validate_args(args)
-
-    # Get total consumption from Octopus Energy API
-    consumption = get_meter_reading_total_consumption(
-        args.octopus_api_key,
-        args.mprn,
-        args.gas_serial_number,
-        account_number=args.octopus_account_number,
-        initial_meter_reading=args.initial_meter_reading,
-    )
-
-    # Send the total consumption to Tado
-    send_reading_to_tado(
-        args.tado_email,
-        args.tado_password,
-        consumption,
-        token_file_path=args.tado_token_file,
-        manual_login=args.manual_tado_login,
-        browser_headless=args.tado_browser_headless,
-    )
+    try:
+        main()
+    except TadoAuthError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(1)

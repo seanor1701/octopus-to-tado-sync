@@ -1,162 +1,119 @@
-# Octopus Energy & Tado Energy IQ Sync Tool
+# Octopus Energy to Tado Energy IQ
 
-This repository contains a script to automatically sync your Octopus Energy
-smart meter readings with Tado's Energy IQ feature. The workflow provided allows
-you to set this up to run on a weekly basis using GitHub Actions, so your Tado
-Energy IQ remains up-to-date without any manual effort.
+Synchronize a gas meter's cumulative Octopus consumption with Tado Energy IQ.
+The GitHub Actions workflow runs daily at 12:00 UTC (GitHub may delay schedules).
+Python 3.12 and 3.14 are covered by the offline CI test suite.
 
-**Note**: This tool is specifically oriented toward users with smart gas meters
-from Octopus Energy.
+## Why authentication used to work once and then fail
 
-## Features
+Tado returns a replacement refresh token when renewing authentication. Every
+runner starts from the `TADO_REFRESH_TOKEN` environment secret. Previously the
+replacement was written only to the temporary runner and discarded at job end,
+so a later run reused the old token and failed with HTTP 400 / `NOT_STARTED`.
 
-- Automatically pulls your gas usage data from Octopus Energy.
-- Syncs the data with Tado Energy IQ for better home energy management insights.
-- Set up once, and it runs weekly via GitHub Actions.
+The workflow now verifies write access before consuming the token, saves its
+replacement back to the encrypted secret before submitting a meter reading,
+and saves again on exit if the library refreshes it during an API request.
+If token storage fails, the job fails. Only token-storage writes are retried;
+meter submissions and rejected authentication are never automatically retried.
+Jobs sharing the `Secrets` environment are serialized without cancelling the
+active job. Do not run a local token refresh while a scheduled run is active.
 
-## Setup Instructions
+## One-time setup or recovery
 
-Follow these steps to configure the sync for your own Octopus Energy and Tado
-accounts:
+Use a GitHub environment named **Secrets**. Keep its existing review and branch
+protection rules. The scheduled workflow only executes on `main`.
 
-### 1. Fork This Repository
+1. Pause the sync workflow in GitHub Actions while configuring or recovering it.
+2. Create a [fine-grained GitHub personal access token](https://github.com/settings/personal-access-tokens/new).
+   Select your repository owner and **Only select repositories**, choosing only
+   this repository. Grant **Environments: Read and write** (Metadata read access
+   is added automatically). Do not grant Contents, Actions, or other write
+   permissions. Set an expiry and renew it before expiry. GitHub requires this
+   permission to update [environment secrets](https://docs.github.com/en/rest/actions/secrets#create-or-update-an-environment-secret);
+   the workflow's standard `GITHUB_TOKEN` is not a secret-management credential.
+3. Save that GitHub token as an environment secret named
+   **TADO_TOKEN_STORE_TOKEN**, in the **Secrets** environment. This is a GitHub
+   token, distinct from the Tado refresh token. Never commit either token.
+4. Locally install the requirements with Python 3.12 or 3.14:
 
-First, fork this repository to your own GitHub account. This will allow you to
-customize the secrets specific to your accounts and run the workflow
-independently.
+   ```bash
+   python -m pip install -r requirements.txt
+   ```
 
-### 2. Configure GitHub Secrets
+5. Sign the GitHub CLI into the repository owner's account. For this repository:
 
-In order to use the script, you'll need to provide credentials for both your
-Tado account and Octopus Energy API. This is done through GitHub secrets.
+   ```bash
+   gh auth switch --user seanor1701
+   ```
 
-The workflow uses a GitHub environment named `Secrets`. If you create
-environment secrets instead of repository secrets, make sure they are added to an
-environment with that exact name.
+6. From your local checkout, run this single authorization command:
 
-1. Go to the **Settings** tab of your forked repository.
-2. In the left-hand menu, select **Secrets and variables** > **Actions**.
-3. Click **New repository secret** and add the following secrets:
+   ```bash
+   python sync_octopus_tado.py --auth-only --manual-tado-login
+   ```
 
-| Secret Name              | Description                                                   |
-|--------------------------|---------------------------------------------------------------|
-| `TADO_EMAIL`             | The email address associated with your Tado account.          |
-| `TADO_PASSWORD`          | The password for your Tado account.                           |
-| `OCTOPUS_MPRN`           | Your gas MPRN (Meter Point Reference Number).                 |
-| `OCTOPUS_GAS_SERIAL`     | The serial number of your gas meter.                          |
-| `OCTOPUS_API_KEY`        | Your Octopus Energy API key. You can obtain this from the Octopus Energy developer portal (details below). |
-| `OCTOPUS_ACCOUNT_NUMBER` | Optional but recommended. Used to auto-discover gas meter details if `OCTOPUS_MPRN` or `OCTOPUS_GAS_SERIAL` are wrong or missing. |
-| `TADO_TOKEN_FILE`         | Optional path used to persist the Tado refresh token. Defaults to `/tmp/tado_refresh_token`. |
-| `OCTOPUS_INITIAL_READING` | Optional meter reading at the start of the Octopus consumption history. Defaults to `6537.9`. |
+   It opens Tado's approval page in your browser without displaying the device
+   URL or token. Approve the device and return to Terminal. The script waits
+   for PyTado's completed status, saves the raw refresh token directly into the
+   **Secrets** environment, and removes its private temporary file. It does not
+   fetch Octopus data or submit a meter reading. No `/tmp/tado_refresh_token`
+   copy/paste, clipboard command, or email/password is needed.
 
-### 3. Obtain Your Octopus Energy Details
+7. Re-enable the workflow and choose **Run workflow**, leaving **auth_only**
+   checked. This checks Tado authentication and saves the next token without
+   fetching consumption or submitting a reading. A second auth-only run verifies
+   that the replacement token survives between runners.
+8. Once both checks succeed, scheduled runs perform the normal sync. Uncheck
+   **auth_only** for a manual run only when you intend to submit a real reading.
 
-To find your **API Key**, **Account Number**, **Gas MPRN**, and **Gas Serial
-Number**, follow these steps:
+The previous `TADO_EMAIL` and `TADO_PASSWORD` secrets are no longer used and may
+be removed separately. Device approval replaces the password-based browser
+automation; Playwright, screenshots and HTML dumps are not used.
 
-1. Log into your [Octopus Energy
-account](https://octopus.energy/dashboard/new/accounts/personal-details/api-access).
-2. Navigate to the "API Access" section of your account. Here, you'll find your
-**API Key**.
-3. Your **Account Number**, **Gas MPRN**, and **Gas Serial Number** can also be found in this
-section.
+## Other secrets
 
-These details are necessary to allow the script to pull your gas usage data from
-Octopus Energy.
+| Secret in environment `Secrets` | Purpose |
+| --- | --- |
+| `TADO_REFRESH_TOKEN` | Created and updated automatically by the authorization command and workflow. Raw token; the PyTado JSON export is also accepted for migration. |
+| `TADO_TOKEN_STORE_TOKEN` | Fine-grained GitHub token for this repository, Environments read/write only. |
+| `OCTOPUS_API_KEY` | Octopus API key. |
+| `OCTOPUS_MPRN` and `OCTOPUS_GAS_SERIAL` | Gas meter details, not electricity MPAN/meter details. |
+| `OCTOPUS_ACCOUNT_NUMBER` | Optional account discovery when explicit meter details are absent or return 404. |
+| `OCTOPUS_INITIAL_READING` | Optional starting meter-reading offset. Preserves the existing documented `6537.9` default. Check that it matches this meter and the available consumption history. |
 
-### 4. Enable the Workflow
+## Failures and recovery
 
-The repository is already set up with a GitHub Actions workflow that runs the
-sync script once a week. The workflow is located at
-`.github/workflows/schedule_sync.yml`. After you’ve added your secrets, the
-workflow will automatically begin running on schedule.
+- **HTTP 400 / rejected refresh token:** confirm the replacement-token change is
+  installed, then perform the local authorization command once. Repeatedly
+  copying the same old token cannot repair a rejected token.
+- **Token store permission failure:** use the repository owner's GitHub CLI
+  account locally. In Actions, check `TADO_TOKEN_STORE_TOKEN` expiry and its
+  repository selection / Environments write permission. Do not substitute a
+  broad administrator token or publish token files in caches or artifacts.
+- **Expired or denied device approval:** rerun the local auth-only command and
+  approve the newly opened browser prompt promptly.
+- **Octopus 404:** verify the gas MPRN/serial against your Octopus API account,
+  or configure account discovery. API errors never return a baseline-only or
+  partial reading. The existing cumulative-consumption calculation is retained.
+- **An interrupted runner or failed secret update:** a network interruption
+  after Tado rotates a token can still require fresh local authorization. The
+  private temporary file is cleaned on normal and exception paths; hosted-runner
+  disposal handles forced termination. No distributed transaction exists between
+  Tado and GitHub.
 
-You can manually trigger the workflow by navigating to the **Actions** tab in
-your repository and selecting the sync workflow.
-
-### 5. (Optional) Customize the Schedule
-
-By default, the workflow runs weekly. If you want to change the schedule:
-
-1. Open the `.github/workflows/schedule_sync.yml` file in your repository.
-2. Modify the schedule trigger under `on: schedule:` following [the cron
-syntax](https://crontab.guru/) for the desired frequency.
-
-For example, to run daily at midnight:
-
-```yaml
-on: schedule:
-    - cron: '0 0 * * *' ```
-```
-
-### 6. Monitor the Workflow
-
-You can check the status of the sync runs in the **Actions** tab of your GitHub
-repository. Here, you can see past runs, their logs, and any errors that might
-have occurred.
-
-### Usage
-
-The GitHub Actions workflow automatically runs the following script:
-
-```bash
-python sync_octopus_tado.py \
-  --tado-email "${{ secrets.TADO_EMAIL }}" \
-  --tado-password "${{ secrets.TADO_PASSWORD }}" \
-  --mprn "${{ secrets.OCTOPUS_MPRN }}" \
-  --gas-serial-number "${{ secrets.OCTOPUS_GAS_SERIAL }}" \
-  --octopus-api-key "${{ secrets.OCTOPUS_API_KEY }}" \
-  --octopus-account-number "${{ secrets.OCTOPUS_ACCOUNT_NUMBER }}"
-```
-
-For local runs where browser automation is blocked by security software, use
-manual Tado activation:
+## Offline verification
 
 ```bash
-python sync_octopus_tado.py \
-  --manual-tado-login \
-  --tado-email "you@example.com" \
-  --tado-password "your-password" \
-  --mprn "your-mprn" \
-  --gas-serial-number "your-meter-serial" \
-  --octopus-api-key "your-octopus-api-key" \
-  --octopus-account-number "your-account-number" \
-  --initial-meter-reading "your-starting-meter-reading"
+python -m unittest discover -v
+python -m black --check sync_octopus_tado.py tado_auth.py tests
+python -m pip check
 ```
 
-The script will:
+Tests mock external OAuth, Tado home/meter APIs and GitHub secret storage,
+including three consecutive runs with rotating tokens, rejected refreshes,
+activation failures, persistence failures, cleanup, and auth-only operation.
 
-1. Fetch the most recent gas usage readings from your Octopus Energy account
-using their API.
-2. Sync these readings with Tado's Energy IQ to keep your gas consumption
-insights up-to-date.
+## License
 
-### Troubleshooting
-
-- **Incorrect credentials**: If the script fails due to incorrect credentials,
-  ensure that the email, password, MPRN, and serial number are accurate. Verify
-that your Octopus API key is valid.
-- **Workflow failures**: Detailed logs for each sync run can be found in the
-  **Actions** tab of your repository. Use these logs to identify and
-troubleshoot any issues.
-- **Secrets are empty in GitHub Actions debug logs**: If debug output shows
-  `secrets.NAME => null`, add the missing values under **Settings** > **Secrets
-  and variables** > **Actions** for the repository running the workflow. GitHub
-  does not provide repository secrets to pull requests from forks.
-- **Octopus 404 errors**: Add `OCTOPUS_ACCOUNT_NUMBER` as a GitHub secret so the
-  script can discover your gas meter details from the Octopus account endpoint.
-  If it still fails, verify that the account has a gas meter and the API key is
-  for that account.
-- **Browser or antivirus blocks**: The script can complete the Tado device login
-  without launching Playwright by passing `--manual-tado-login`. The scheduled
-  GitHub workflow runs Playwright headlessly.
-
-### Contributions
-
-Feel free to contribute to this project by opening issues or submitting pull
-requests. Any improvements, bug fixes, or new feature suggestions are welcome!
-
-### License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file
-for details.
+See [LICENSE](LICENSE).

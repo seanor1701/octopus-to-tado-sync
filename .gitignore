@@ -1,2 +1,6 @@
 __pycache__/
 *.py[cod]
+.venv*/
+.DS_Store
+*refresh_token*
+token.json
